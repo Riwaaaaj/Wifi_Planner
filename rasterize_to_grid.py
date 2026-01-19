@@ -3,6 +3,37 @@ import json
 import math
 import matplotlib.pyplot as plt
 
+def crop_grid_to_walls(grid, margin=20):
+    """
+    Crops grid to the bounding box of wall cells (grid==1),
+    with extra margin (in grid cells).
+    Returns cropped_grid and crop metadata.
+    """
+   
+
+    ys, xs = np.where(grid > 0)
+    if len(xs) == 0 or len(ys) == 0:
+        return grid, {"cropped": False, "reason": "no wall cells found"}
+
+    y_min, y_max = ys.min(), ys.max()
+    x_min, x_max = xs.min(), xs.max()
+
+    y_min = max(0, y_min - margin)
+    y_max = min(grid.shape[0] - 1, y_max + margin)
+    x_min = max(0, x_min - margin)
+    x_max = min(grid.shape[1] - 1, x_max + margin)
+
+    cropped = grid[y_min:y_max + 1, x_min:x_max + 1]
+
+    info = {
+        "cropped": True,
+        "crop_box": {"y_min": int(y_min), "y_max": int(y_max), "x_min": int(x_min), "x_max": int(x_max)},
+        "original_shape": [int(grid.shape[0]), int(grid.shape[1])],
+        "cropped_shape": [int(cropped.shape[0]), int(cropped.shape[1])]
+    }
+    return cropped, info
+
+
 WALL_FACES_FILE = "wall_faces_xy.npy"
 
 def load_faces(path: str):
@@ -72,15 +103,77 @@ def rasterize_faces_to_grid(faces, cell_size=0.25, face_sample_step=0.05):
     return grid, meta
 
 def save_outputs(grid, meta):
-    # Save numpy grid (this is the main deliverable)
+    import numpy as np
+    import json
+    import matplotlib.pyplot as plt
+
     np.save("grid.npy", grid)
 
-    # Save metadata (cell size, bounds, codes)
     with open("grid_meta.json", "w") as f:
         json.dump(meta, f, indent=2)
 
-    # Preview image disabled because grid is too large and causes RAM crash
-    print("Saved grid.npy and grid_meta.json (preview disabled).")
+    # Human-friendly preview: show walls as white pixels
+    plt.figure(figsize=(8, 8))
+    plt.imshow(grid == 1, origin="lower")  # boolean image: walls only
+    plt.axis("off")
+    plt.tight_layout()
+    plt.savefig("grid_preview.png", dpi=200)
+    plt.close()
+
+    print("Saved grid.npy, grid_meta.json, grid_preview.png")
+    print("Grid shape:", grid.shape)
+
+def keep_largest_wall_component(grid):
+    """
+    Keeps only the largest connected component of wall cells.
+    Removes tiny specks scattered across the drawing.
+    Uses 8-connectivity. Returns cleaned_grid.
+    """
+    from collections import deque
+
+    H, W = grid.shape
+    wall = (grid > 0)
+
+    visited = np.zeros((H, W), dtype=bool)
+    best_count = 0
+    best_cells = None
+
+    # 8 directions
+    dirs = [(-1,-1), (-1,0), (-1,1),
+            (0,-1),          (0,1),
+            (1,-1),  (1,0),  (1,1)]
+
+    for r in range(H):
+        for c in range(W):
+            if wall[r, c] and not visited[r, c]:
+                q = deque([(r, c)])
+                visited[r, c] = True
+                cells = [(r, c)]
+                cnt = 1
+
+                while q:
+                    cr, cc = q.popleft()
+                    for dr, dc in dirs:
+                        nr, nc = cr + dr, cc + dc
+                        if 0 <= nr < H and 0 <= nc < W:
+                            if wall[nr, nc] and not visited[nr, nc]:
+                                visited[nr, nc] = True
+                                q.append((nr, nc))
+                                cells.append((nr, nc))
+                                cnt += 1
+
+                if cnt > best_count:
+                    best_count = cnt
+                    best_cells = cells
+
+    cleaned = np.zeros_like(grid)
+    if best_cells is None:
+        return cleaned
+
+    for r, c in best_cells:
+        cleaned[r, c] = 1  # keep as wall
+
+    return cleaned
 
 
 if __name__ == "__main__":
@@ -89,10 +182,31 @@ if __name__ == "__main__":
 
     # Start with a coarse-ish cell size so it runs fast.
     # We can refine later (0.5, 0.25, 0.1...)
-    grid, meta = rasterize_faces_to_grid(faces, cell_size=0.25, face_sample_step=0.05)
+    grid, meta = rasterize_faces_to_grid(
+    faces,
+    cell_size=1.5,
+    face_sample_step=0.3
+)
 
-    print("Grid shape:", grid.shape)
-    print("Wall cells:", int(grid.sum()))
 
-    save_outputs(grid, meta)
-    print("Saved: grid.npy, grid_meta.json, grid_preview.png")
+print("Grid shape BEFORE cleanup:", grid.shape)
+print("Wall cells BEFORE cleanup:", int(grid.sum()))
+
+# ✅ Remove speck noise
+grid_clean = keep_largest_wall_component(grid)
+
+print("Wall cells AFTER cleanup:", int(grid_clean.sum()))
+
+# ✅ Now crop
+grid_cropped, crop_info = crop_grid_to_walls(grid_clean, margin=20)
+
+print("Grid shape AFTER crop:", grid_cropped.shape)
+print("Wall cells AFTER crop:", int(grid_cropped.sum()))
+
+meta["crop"] = crop_info
+meta["cleanup"] = {"method": "largest_connected_component"}
+
+save_outputs(grid_cropped, meta)
+print("Saved CLEANED+CROPPED: grid.npy, grid_meta.json, grid_preview.png")
+
+
