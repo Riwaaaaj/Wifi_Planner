@@ -16,3 +16,10 @@ grid.npy
 # OS junk
 .DS_Store
 Thumbs.db
+
+.venv/
+grid.npy
+grid_preview.png
+house.dxf
+wall_faces_xy.npy
+
