@@ -1,5 +1,5 @@
-import ezdxf
-import numpy as np
+import ezdxf # For reading DXF files
+import numpy as np # For grid representation
 import math
 
 DXF_FILE = "house.dxf"
